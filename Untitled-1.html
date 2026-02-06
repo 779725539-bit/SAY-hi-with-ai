@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>我的 AI 终端</title>
+    <style>
+        body {
+            background-color: #0d0d0d;
+            color: #00ff00;
+            font-family: 'Courier New', Courier, monospace;
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+        }
+        #chat-container {
+            flex: 1;
+            padding: 24px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            -webkit-overflow-scrolling: touch;
+            overscroll-behavior: contain;
+        }
+        #top-bar {
+            border-bottom: 1px solid #333;
+            padding: 10px 16px;
+            background-color: #000;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+        .message-line {
+            line-height: 1.6;
+            word-wrap: break-word;
+            border-radius: 10px;
+            padding: 10px 12px;
+            max-width: 80%;
+        }
+        .message-line.system {
+            padding: 0;
+            max-width: 100%;
+            background: transparent;
+        }
+        .message-line.user {
+            align-self: flex-end;
+            background: #0a0a0a;
+            color: #ffffff;
+            border: 1px solid #333;
+        }
+        .message-line.ai {
+            align-self: flex-start;
+            background: #071a07;
+            color: #00ff00;
+            border: 1px solid #0f0;
+            white-space: pre-wrap;
+        }
+        #input-area {
+            border-top: 1px solid #333;
+            padding: 12px 16px;
+            background-color: #000;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            position: sticky;
+            bottom: 0;
+            padding-bottom: calc(12px + env(safe-area-inset-bottom));
+        }
+        .prompt {
+            margin-right: 8px;
+            color: #00ff00;
+            font-weight: bold;
+        }
+        #user-input {
+            background: transparent;
+            border: none;
+            color: #ffffff;
+            font-family: inherit;
+            font-size: 1rem;
+            flex: 1;
+            outline: none;
+        }
+        .name-input {
+            background: #111;
+            color: #0f0;
+            border: 1px solid #333;
+            padding: 6px 8px;
+        }
+        .action-btn {
+            background: #111;
+            color: #0f0;
+            border: 1px solid #333;
+            padding: 6px 10px;
+        }
+        .blinking-cursor::after {
+            content: "▋";
+            animation: blink 1s step-start infinite;
+        }
+        @keyframes blink { 50% { opacity: 0; } }
+        details.reasoning {
+            margin-top: 6px;
+            padding: 8px 10px;
+            border: 1px dashed #0f0;
+            border-radius: 6px;
+            background: #061406;
+            max-width: 80%;
+        }
+        details.reasoning > summary {
+            cursor: pointer;
+            color: #0f0;
+        }
+        pre.reasoning-text {
+            white-space: pre-wrap;
+            color: #9aff9a;
+        }
+        @media (max-width: 600px) {
+            body { font-size: 16px; }
+            #chat-container { padding: 12px; }
+            .message-line { max-width: 100%; }
+            #input-area { padding: 10px 12px; gap: 8px; }
+            .action-btn, .name-input { padding: 10px 14px; font-size: 16px; }
+            #user-input { font-size: 16px; }
+            details.reasoning { max-width: 100%; }
+        }
+    </style>
+    
+    
+</head>
+<body>
+
+    <div id="top-bar">
+        <input class="name-input" type="text" id="user-name" value="User" style="width:120px">
+        <button class="action-btn" id="apply-name">应用名字</button>
+    </div>
+
+    <div id="chat-container">
+        <div class="message-line system">System: 已连接后端代理。</div>
+        <div class="message-line system">System: 请输入内容并按回车：</div>
+        <div class="message-line system">----------------------------------</div>
+    </div>
+
+    <div id="input-area">
+        <span class="prompt" id="prompt-user">User@Localhost:~$</span>
+        <input type="text" id="user-input" placeholder="在此输入..." autofocus autocomplete="off">
+        <button class="action-btn" id="send-btn">发送</button>
+        <button class="action-btn" id="clear-btn">清空对话</button>
+    </div>
+
+    <script>
+      const chatContainer = document.getElementById('chat-container');
+      const input = document.getElementById('user-input');
+      const clearBtn = document.getElementById('clear-btn');
+      const sendBtn = document.getElementById('send-btn');
+      const userNameInput = document.getElementById('user-name');
+      const applyNameBtn = document.getElementById('apply-name');
+      const promptUser = document.getElementById('prompt-user');
+      const aiName = 'civis';
+      let userName = userNameInput.value;
+      const baseUrl = 'https://api.minimaxi.com/v1';
+      const builtInKey = 'sk-api-1f5Gfro1dbLYcLYCVpGFUpyO0loRs4tZlFBwF1MCZ3E5TSh94DJIHvGdMgeSJeVmrRyG4GY1rCLCIK-N3f6K047lr7pwGUoydSheVNIBBo67-Y8MbjLJNTg';
+      let apiKey = builtInKey || localStorage.getItem('MINIMAX_API_KEY') || '';
+      const hashSeed = location.hash ? decodeURIComponent(location.hash.slice(1)) : '';
+      if (!builtInKey && !apiKey && hashSeed) {
+        apiKey = hashSeed.startsWith('key=') ? hashSeed.slice(4) : hashSeed;
+        localStorage.setItem('MINIMAX_API_KEY', apiKey);
+        history.replaceState(null, '', location.pathname + location.search);
+      }
+      function setPrompt() { promptUser.textContent = `${userName}@Localhost:~$`; }
+      setPrompt();
+      function addLine(role, t) {
+        const div = document.createElement('div');
+        div.className = `message-line ${role}`;
+        const prefix = role === 'user' ? `${userName}: ` : role === 'ai' ? `${aiName}: ` : '';
+        div.textContent = prefix + t;
+        chatContainer.appendChild(div);
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+        return div;
+      }
+      function escapeHtml(s) {
+        return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      }
+      function renderMarkdown(md) {
+        let src = md;
+        const parts = src.split(/```/);
+        let html = '';
+        for (let i = 0; i < parts.length; i++) {
+          if (i % 2 === 1) {
+            html += '<pre class="reasoning-text"><code>' + escapeHtml(parts[i]) + '</code></pre>';
+          } else {
+            let t = escapeHtml(parts[i]);
+            t = t.replace(/^### (.*)$/gm, '<h3>$1</h3>');
+            t = t.replace(/^## (.*)$/gm, '<h2>$1</h2>');
+            t = t.replace(/^# (.*)$/gm, '<h1>$1</h1>');
+            t = t.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+            t = t.replace(/\*(.+?)\*/g, '<em>$1</em>');
+            t = t.replace(/`([^`]+)`/g, '<code>$1</code>');
+            t = t.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+            const lines = t.split('\n');
+            let inUL = false, inOL = false;
+            let buff = '';
+            for (const line of lines) {
+              if (/^\s*[-*+]\s+/.test(line)) {
+                if (!inUL) { buff += '<ul>'; inUL = true; }
+                buff += '<li>' + line.replace(/^\s*[-*+]\s+/, '') + '</li>';
+                continue;
+              } else if (/^\s*\d+\.\s+/.test(line)) {
+                if (!inOL) { buff += '<ol>'; inOL = true; }
+                buff += '<li>' + line.replace(/^\s*\d+\.\s+/, '') + '</li>';
+                continue;
+              } else {
+                if (inUL) { buff += '</ul>'; inUL = false; }
+                if (inOL) { buff += '</ol>'; inOL = false; }
+              }
+              if (line.trim().length === 0) {
+                buff += '<br>';
+              } else {
+                buff += line + '<br>';
+              }
+            }
+            if (inUL) buff += '</ul>';
+            if (inOL) buff += '</ol>';
+            html += buff;
+          }
+        }
+        return html;
+      }
+      async function sendMessageStream(text) {
+        if (!apiKey) {
+          addLine('system', 'System: 缺少 API Key。请在文件中设置 builtInKey。');
+          return;
+        }
+        const payload = {
+          model: 'MiniMax-M2.1',
+          messages: [
+            { role: 'system', content: '你叫 civis，是“程翔”的助手。默认用中文交流，回答简洁准确、重点清晰，并在需要时用 Markdown 格式化内容。' },
+            { role: 'user', content: text }
+          ],
+          max_tokens: 512,
+          temperature: 0.7,
+          stream: true,
+          extra_body: { reasoning_split: true }
+        };
+        const res = await fetch(`${baseUrl}/chat/completions`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`
+          },
+          body: JSON.stringify(payload)
+        });
+        if (!res.ok || !res.body) {
+          const fallback = await res.text();
+          addLine('ai', '[错误] 上游响应异常：' + fallback.slice(0, 200));
+          return;
+        }
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder('utf-8');
+        const aiDiv = addLine('ai', '');
+        aiDiv.classList.add('blinking-cursor');
+        aiDiv.textContent = `${aiName}: `;
+        let inThink = false;
+        let thinkBuf = '';
+        let finalText = '';
+        let buffer = '';
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          const chunk = decoder.decode(value);
+          buffer += chunk;
+          const parts = buffer.split('\n\n');
+          for (let i = 0; i < parts.length - 1; i++) {
+            const segment = parts[i];
+            const lines = segment.split('\n');
+            for (const line of lines) {
+              if (line.startsWith('data: ')) {
+                const payload = line.slice(6);
+                if (payload === '[DONE]') continue;
+                try {
+                  const json = JSON.parse(payload);
+                  if (json.error && json.error.message) {
+                    aiDiv.classList.remove('blinking-cursor');
+                    aiDiv.textContent += '[错误] ' + json.error.message;
+                    chatContainer.scrollTop = chatContainer.scrollHeight;
+                    continue;
+                  }
+                  const delta =
+                    (json.choices && json.choices[0] && json.choices[0].delta && json.choices[0].delta.content) ||
+                    (json.message && json.message.content) ||
+                    (json.text) ||
+                    '';
+                  if (delta) {
+                    let s = delta;
+                    let out = '';
+                    let idx = 0;
+                    while (idx < s.length) {
+                      if (!inThink && s.startsWith('<think>', idx)) { inThink = true; idx += 7; continue; }
+                      if (inThink && s.startsWith('</think>', idx)) { inThink = false; idx += 8; continue; }
+                      if (inThink) { thinkBuf += s[idx]; idx++; } else { out += s[idx]; idx++; }
+                    }
+                    if (out) {
+                      aiDiv.textContent += out;
+                      finalText += out;
+                      chatContainer.scrollTop = chatContainer.scrollHeight;
+                    }
+                  }
+                } catch {
+                  aiDiv.textContent += payload;
+                }
+              } else if (line.trim().startsWith('{')) {
+                try {
+                  const json = JSON.parse(line.trim());
+                  const delta =
+                    (json.choices && json.choices[0] && json.choices[0].delta && json.choices[0].delta.content) ||
+                    (json.message && json.message.content) ||
+                    (json.text) ||
+                    '';
+                  if (delta) {
+                    let s = delta;
+                    let out = '';
+                    let idx = 0;
+                    while (idx < s.length) {
+                      if (!inThink && s.startsWith('<think>', idx)) { inThink = true; idx += 7; continue; }
+                      if (inThink && s.startsWith('</think>', idx)) { inThink = false; idx += 8; continue; }
+                      if (inThink) { thinkBuf += s[idx]; idx++; } else { out += s[idx]; idx++; }
+                    }
+                    if (out) {
+                      aiDiv.textContent += out;
+                      finalText += out;
+                    }
+                    chatContainer.scrollTop = chatContainer.scrollHeight;
+                  }
+                } catch {
+                  aiDiv.textContent += line;
+                }
+              }
+            }
+          }
+          buffer = parts[parts.length - 1];
+        }
+        aiDiv.classList.remove('blinking-cursor');
+        if (finalText && finalText.trim().length > 0) {
+          aiDiv.innerHTML = `${aiName}: ` + renderMarkdown(finalText.trim());
+        }
+        if (thinkBuf && thinkBuf.trim().length > 0) {
+          const d = document.createElement('details');
+          d.className = 'reasoning';
+          const s = document.createElement('summary');
+          s.textContent = '思考展开/折叠';
+          const pre = document.createElement('pre');
+          pre.className = 'reasoning-text';
+          pre.textContent = thinkBuf.trim();
+          d.appendChild(s);
+          d.appendChild(pre);
+          chatContainer.appendChild(d);
+          chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+      }
+      input.addEventListener('keydown', async (e) => {
+        if (e.key === 'Enter' && input.value.trim()) {
+          const t = input.value.trim();
+          addLine('user', t);
+          input.value = '';
+          await sendMessageStream(t);
+        }
+      });
+      clearBtn.addEventListener('click', () => {
+        chatContainer.innerHTML = '';
+        addLine('system', 'System: 前端直连已准备。');
+        addLine('system', 'System: 请输入内容并按回车：');
+        addLine('system', '----------------------------------');
+      });
+      sendBtn.addEventListener('click', async () => {
+        const t = input.value.trim();
+        if (t) {
+          addLine('user', t);
+          input.value = '';
+          await sendMessageStream(t);
+        }
+      });
+      applyNameBtn.addEventListener('click', () => {
+        const v = userNameInput.value.trim();
+        if (v) { userName = v; setPrompt(); }
+      });
+      addLine('system', 'System: 前端直连模式。');
+      (async () => {
+        await sendMessageStream('请用中文向访问者进行简短自我介绍：你的名字是“civis”，你是“程翔”的助手。说明你能帮助处理的常见问题类型，用2-3句，友好且直接。');
+      })();
+    </script>
+</body>
+</html>
